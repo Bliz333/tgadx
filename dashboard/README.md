@@ -34,6 +34,7 @@
 | `AI_BASE_URL` | `https://api.deepseek.com/chat/completions` |
 | `AI_MODEL` | `deepseek-v4-flash` |
 | `CLEANUP_DAYS` | `30`（自动清理：未回复过的话题超过这么多天没消息就删；填 `0` 关闭） |
+| `AUTO_BLOCK` | `1`（判为广告后自动拉黑该号，后续消息忽略；填 `0` 则只拦不拉黑） |
 
 **密钥（选 Secret / Encrypt）**
 | 名称 | 值 |

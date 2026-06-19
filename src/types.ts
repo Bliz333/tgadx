@@ -11,6 +11,7 @@ export interface Env {
   AI_BASE_URL: string;
   AI_MODEL: string;
   CLEANUP_DAYS: string; // 自动清理：未回复过的话题超过这么多天没新消息就删；"0" 关闭
+  AUTO_BLOCK: string; // "1"=判为广告后自动拉黑该用户；"0"=只拦截不拉黑（每条仍进广告话题）
 }
 
 // Telegram 数据结构（仅用到的字段）

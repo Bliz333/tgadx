@@ -193,15 +193,19 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
   console.log(`入站判定 user=${userId} 状态=${rec ? 'pending' : 'new'} spam=${verdict.isSpam} 理由=${verdict.reason} 内容=${JSON.stringify(content).slice(0, 300)}`);
 
   if (verdict.isSpam) {
-    await quarantine(env, msg, verdict.reason);
-    // 自动拉黑：判为广告后，该用户后续消息一律静默丢弃，直到你 /allow 放行
-    await setUser(env, userId, {
-      topicId: rec?.topicId || 0,
-      status: 'blocked',
-      name: displayName(msg),
-      firstSeen: rec?.firstSeen || Date.now(),
-      lastSeen: Date.now(),
-    });
+    // 自动拉黑（开关 AUTO_BLOCK，默认开）：之后消息一律静默丢弃，直到你 /allow 放行。
+    // 关闭(="0")时不拉黑，该号每条广告仍会被拦并进广告话题。
+    const willBlock = env.AUTO_BLOCK !== '0';
+    await quarantine(env, msg, verdict.reason, willBlock);
+    if (willBlock) {
+      await setUser(env, userId, {
+        topicId: rec?.topicId || 0,
+        status: 'blocked',
+        name: displayName(msg),
+        firstSeen: rec?.firstSeen || Date.now(),
+        lastSeen: Date.now(),
+      });
+    }
     return;
   }
 
@@ -231,7 +235,7 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
 }
 
 // 把广告消息扔进固定的“🚫 广告拦截”隔离话题（含来源 + 理由 + 原文）
-async function quarantine(env: Env, msg: TgMessage, reason: string): Promise<void> {
+async function quarantine(env: Env, msg: TgMessage, reason: string, blocked: boolean): Promise<void> {
   let topicId = await getSpamTopicId(env);
   if (!topicId) {
     topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, '🚫 广告拦截');
@@ -239,10 +243,11 @@ async function quarantine(env: Env, msg: TgMessage, reason: string): Promise<voi
   }
   const name = displayName(msg);
   const uname = msg.from!.username ? `@${msg.from!.username}` : '（无用户名）';
+  const head = blocked ? '🚫 拦截广告（已自动拉黑，后续消息将被忽略）' : '🚫 拦截广告';
   await sendMessage(
     env,
     env.ADMIN_GROUP_ID,
-    `🚫 拦截广告（已自动拉黑，后续消息将被忽略）\n来自：${name} ${uname}\nID：${msg.from!.id}\n理由：${reason}\n误判？发 /allow ${msg.from!.id} 放行`,
+    `${head}\n来自：${name} ${uname}\nID：${msg.from!.id}\n理由：${reason}\n误判？发 /allow ${msg.from!.id} 放行`,
     { message_thread_id: topicId },
   );
   try {

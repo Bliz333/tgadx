@@ -9,6 +9,7 @@ ADMIN_USER_ID = ""                                         # 你的 Telegram 用
 AI_BASE_URL = "https://api.deepseek.com/chat/completions"  # OpenAI 兼容接口；换供应商只改这里
 AI_MODEL = "deepseek-v4-flash"                             # 判定用的便宜模型（OpenAI 兼容）
 CLEANUP_DAYS = "30"                                        # 自动清理：未回复过的话题超过这么多天没新消息就删；"0" 关闭
+AUTO_BLOCK = "1"                                           # 1=判为广告后自动拉黑该号；0=只拦截不拉黑（每条仍进广告话题）
 
 # 定时任务：每天 03:00 UTC 自动清理（删除未回复过、超过 CLEANUP_DAYS 天没新消息的话题）
 [triggers]

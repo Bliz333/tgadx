@@ -316,14 +316,17 @@ async function handleInbound(env, msg) {
   const verdict = await classify(env, content);
   console.log(`\u5165\u7AD9\u5224\u5B9A user=${userId} \u72B6\u6001=${rec ? "pending" : "new"} spam=${verdict.isSpam} \u7406\u7531=${verdict.reason} \u5185\u5BB9=${JSON.stringify(content).slice(0, 300)}`);
   if (verdict.isSpam) {
-    await quarantine(env, msg, verdict.reason);
-    await setUser(env, userId, {
-      topicId: rec?.topicId || 0,
-      status: "blocked",
-      name: displayName(msg),
-      firstSeen: rec?.firstSeen || Date.now(),
-      lastSeen: Date.now()
-    });
+    const willBlock = env.AUTO_BLOCK !== "0";
+    await quarantine(env, msg, verdict.reason, willBlock);
+    if (willBlock) {
+      await setUser(env, userId, {
+        topicId: rec?.topicId || 0,
+        status: "blocked",
+        name: displayName(msg),
+        firstSeen: rec?.firstSeen || Date.now(),
+        lastSeen: Date.now()
+      });
+    }
     return;
   }
   let topicId = rec?.topicId;
@@ -355,7 +358,7 @@ AI \u5224\u5B9A\uFF1A\u6B63\u5E38\uFF08${verdict.reason}\uFF09
   await relayToTopic(env, msg, topicId, userId);
 }
 __name(handleInbound, "handleInbound");
-async function quarantine(env, msg, reason) {
+async function quarantine(env, msg, reason, blocked) {
   let topicId = await getSpamTopicId(env);
   if (!topicId) {
     topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, "\u{1F6AB} \u5E7F\u544A\u62E6\u622A");
@@ -363,10 +366,11 @@ async function quarantine(env, msg, reason) {
   }
   const name = displayName(msg);
   const uname = msg.from.username ? `@${msg.from.username}` : "\uFF08\u65E0\u7528\u6237\u540D\uFF09";
+  const head = blocked ? "\u{1F6AB} \u62E6\u622A\u5E7F\u544A\uFF08\u5DF2\u81EA\u52A8\u62C9\u9ED1\uFF0C\u540E\u7EED\u6D88\u606F\u5C06\u88AB\u5FFD\u7565\uFF09" : "\u{1F6AB} \u62E6\u622A\u5E7F\u544A";
   await sendMessage(
     env,
     env.ADMIN_GROUP_ID,
-    `\u{1F6AB} \u62E6\u622A\u5E7F\u544A\uFF08\u5DF2\u81EA\u52A8\u62C9\u9ED1\uFF0C\u540E\u7EED\u6D88\u606F\u5C06\u88AB\u5FFD\u7565\uFF09
+    `${head}
 \u6765\u81EA\uFF1A${name} ${uname}
 ID\uFF1A${msg.from.id}
 \u7406\u7531\uFF1A${reason}
