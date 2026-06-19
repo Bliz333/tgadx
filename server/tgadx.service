@@ -1,0 +1,15 @@
+[Unit]
+Description=tgadx Telegram 双向中继机器人
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tgadx
+EnvironmentFile=/opt/tgadx/tgadx.env
+ExecStart=/usr/bin/node /opt/tgadx/tgbot.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

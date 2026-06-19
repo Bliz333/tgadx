@@ -1,0 +1,10 @@
+node_modules/
+.dev.vars
+.wrangler/
+dist/
+*.log
+*.tgz
+
+# 隐私：密钥/账号信息（绝不上传）
+note
+.webhook_secret

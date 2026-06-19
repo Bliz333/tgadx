@@ -1,0 +1,20 @@
+name = "tgadx"
+main = "src/index.ts"
+compatibility_date = "2024-09-01"
+
+# 普通变量（非机密）。部署前请填写 ADMIN_GROUP_ID 和 ADMIN_USER_ID。
+[vars]
+ADMIN_GROUP_ID = ""                                        # 管理群 id（开启话题/Forum，负数，形如 -100xxxxxxxxxx）
+ADMIN_USER_ID = ""                                         # 你的 Telegram 用户 id
+AI_BASE_URL = "https://api.deepseek.com/chat/completions"  # OpenAI 兼容接口；换供应商只改这里
+AI_MODEL = "deepseek-v4-flash"                             # 判定用的便宜模型（OpenAI 兼容）
+
+# KV 命名空间。先运行 `wrangler kv namespace create STATE`，把返回的 id 填进来。
+[[kv_namespaces]]
+binding = "STATE"
+id = "<填入 wrangler kv namespace create STATE 返回的 id>"
+
+# 机密变量用 `wrangler secret put` 设置，不要写在这里：
+#   wrangler secret put BOT_TOKEN
+#   wrangler secret put AI_API_KEY
+#   wrangler secret put WEBHOOK_SECRET
