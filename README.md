@@ -25,6 +25,15 @@
 | `/reset <用户ID>` | 把某人重置为「新用户」，下一条重新 AI 判定（测试用） |
 | `/ban` | 在某人的话题里发，屏蔽该联系人 |
 | `/unban` | 解除屏蔽并信任 |
+| `/del` | 在某个话题里发，删除当前话题（手动清理一个） |
+| `/cleannow` | 立即清理：删除所有「未回复过」且超过 `CLEANUP_DAYS` 天没新消息的话题 |
+
+### 话题清理（避免话题太多）
+
+- **自动**：每天定时（`wrangler.toml` 的 `[triggers] crons`）删除「你从没回复过的(pending)」且超过 `CLEANUP_DAYS`（默认 30）天没新消息的话题；**你回复过的(trusted)永不自动删**。
+- **手动**：`/del`（删当前话题）、`/cleannow`（立即按上面规则批量清）。
+- **App 里直接删**：你也可以在 Telegram 里长按话题删除；bot 有自愈——对方下次再来会自动重建话题，状态不会错乱。
+- 关掉自动清理：把 `CLEANUP_DAYS` 设为 `"0"`。
 
 ---
 
@@ -125,6 +134,8 @@ Cloudflare 后台 → Workers & Pages → **tgadx** → **Logs**，或本机 `np
 | | `ADMIN_USER_ID` | 你的 TG 用户 id |
 | | `AI_BASE_URL` | OpenAI 兼容 chat completions 端点 |
 | | `AI_MODEL` | 判定模型 |
+| | `CLEANUP_DAYS` | 自动清理阈值（天）；`"0"` 关闭 |
+| `wrangler.toml [triggers]` | `crons` | 定时清理的 cron（默认每天 03:00 UTC） |
 | `wrangler secret` | `BOT_TOKEN` | bot token |
 | | `AI_API_KEY` | AI 接口 key |
 | | `WEBHOOK_SECRET` | 校验 Telegram webhook 的密钥（与 setWebhook 一致） |

@@ -27,6 +27,8 @@ const commands = [
   { command: 'reset', description: '重置为新用户、重新 AI 判定（测试用）：/reset 用户ID' },
   { command: 'ban', description: '屏蔽当前话题的联系人' },
   { command: 'unban', description: '解除屏蔽并信任' },
+  { command: 'del', description: '删除当前话题（在要删的话题里发）' },
+  { command: 'cleannow', description: '立即清理未回复过的过期话题' },
 ];
 
 (async () => {

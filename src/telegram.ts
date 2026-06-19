@@ -44,3 +44,8 @@ export async function createForumTopic(env: Env, chatId: number | string, name: 
   const result = await call(env, 'createForumTopic', { chat_id: chatId, name });
   return result.message_thread_id as number;
 }
+
+// 删除一个话题（清理用）
+export function deleteForumTopic(env: Env, chatId: number | string, topicId: number): Promise<any> {
+  return call(env, 'deleteForumTopic', { chat_id: chatId, message_thread_id: topicId });
+}

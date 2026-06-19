@@ -4,13 +4,15 @@ import {
   getUser,
   setUser,
   deleteUser,
+  listUsers,
   getUserIdByTopic,
   setTopicMap,
   deleteTopicMap,
   getSpamTopicId,
   setSpamTopicId,
+  clearSpamTopicId,
 } from './store';
-import { sendMessage, copyMessage, createForumTopic } from './telegram';
+import { sendMessage, copyMessage, createForumTopic, deleteForumTopic } from './telegram';
 
 function displayName(msg: TgMessage): string {
   const u = msg.from;
@@ -19,7 +21,6 @@ function displayName(msg: TgMessage): string {
   return name || u.username || String(u.id);
 }
 
-// 话题相关的服务消息（创建/关闭/编辑话题）不是真实聊天内容，忽略
 function isServiceMessage(msg: TgMessage): boolean {
   return Boolean(
     msg.forum_topic_created ||
@@ -30,7 +31,6 @@ function isServiceMessage(msg: TgMessage): boolean {
 }
 
 // 正文 + 隐藏在实体里的链接/@提及 + 是否转发，整理成给 AI 判定的文本。
-// 广告常把 t.me/xxxbot 之类的链接藏在“超链接实体(text_link)”里，纯 msg.text 看不到。
 function extractContent(msg: TgMessage): string {
   const parts: string[] = [];
   if (msg.text) parts.push(msg.text);
@@ -74,7 +74,7 @@ async function handleAdminGroup(env: Env, msg: TgMessage): Promise<void> {
   const text = msg.text?.trim() ?? '';
   const reply = topicId ? { message_thread_id: topicId } : {};
 
-  // /allow <ID>：放行（信任，之后不再判定）
+  // /allow <ID>：放行（信任，之后不再判定、永不自动清理）
   if (text.startsWith('/allow')) {
     const id = Number(text.split(/\s+/)[1]);
     if (!id) return void (await sendMessage(env, env.ADMIN_GROUP_ID, '用法：/allow <用户ID>', reply));
@@ -91,6 +91,31 @@ async function handleAdminGroup(env: Env, msg: TgMessage): Promise<void> {
     await deleteUser(env, id);
     await sendMessage(env, env.ADMIN_GROUP_ID, `♻️ 已重置用户 ${id}，其下一条消息会被当作新用户重新 AI 判定。`, reply);
     return;
+  }
+
+  // /cleannow：立即按规则清理（删除未回复过、且超过 CLEANUP_DAYS 天没新消息的话题）
+  if (text.startsWith('/cleannow')) {
+    const n = await runCleanup(env);
+    await sendMessage(env, env.ADMIN_GROUP_ID, `🧹 清理完成，删除了 ${n} 个未回复的过期话题。`, reply);
+    return;
+  }
+
+  // /del：删除当前话题（手动清理一个）
+  if (text === '/del') {
+    if (!topicId) return void (await sendMessage(env, env.ADMIN_GROUP_ID, '请在要删除的话题里发送 /del。'));
+    const spamTopicId = await getSpamTopicId(env);
+    const userId = await getUserIdByTopic(env, topicId);
+    try {
+      await deleteForumTopic(env, env.ADMIN_GROUP_ID, topicId);
+    } catch (e) {
+      console.error('删除话题失败', e);
+    }
+    if (userId) {
+      await deleteTopicMap(env, topicId);
+      await deleteUser(env, userId);
+    }
+    if (spamTopicId && topicId === spamTopicId) await clearSpamTopicId(env);
+    return; // 话题已删，无需回执
   }
 
   if (!topicId) return; // 非话题内（如 General）忽略
@@ -110,7 +135,7 @@ async function handleAdminGroup(env: Env, msg: TgMessage): Promise<void> {
     return;
   }
 
-  // 普通回复 → 标记信任（之后不再判定）+ 转发给用户
+  // 普通回复 → 标记信任（之后不再判定/不再自动清理）+ 转发给用户
   const rec = await getUser(env, userId);
   if (rec && rec.status === 'pending') {
     rec.status = 'trusted';
@@ -141,6 +166,7 @@ async function allowUser(env: Env, userId: number): Promise<void> {
     status: 'trusted',
     name: rec?.name || String(userId),
     firstSeen: rec?.firstSeen || Date.now(),
+    lastSeen: Date.now(),
   });
   await sendMessage(env, env.ADMIN_GROUP_ID, `✅ 已放行用户 ${userId}，其后续消息会进入本话题，你可在此直接回复。`, {
     message_thread_id: topicId,
@@ -153,8 +179,11 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
   const rec = await getUser(env, userId);
 
   if (rec?.status === 'blocked') return;
+
   if (rec?.status === 'trusted') {
-    await relayToTopic(env, msg, rec.topicId);
+    rec.lastSeen = Date.now();
+    await setUser(env, userId, rec);
+    await relayToTopic(env, msg, rec.topicId, userId);
     return;
   }
 
@@ -175,7 +204,6 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
     const topicName = `${name} #${userId}`.slice(0, 128);
     topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, topicName);
     await setTopicMap(env, topicId, userId);
-    await setUser(env, userId, { topicId, status: 'pending', name, firstSeen: Date.now() });
     const uname = msg.from!.username ? `@${msg.from!.username}` : '（无用户名）';
     await sendMessage(
       env,
@@ -184,7 +212,14 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
       { message_thread_id: topicId },
     );
   }
-  await relayToTopic(env, msg, topicId);
+  await setUser(env, userId, {
+    topicId,
+    status: 'pending',
+    name: rec?.name || displayName(msg),
+    firstSeen: rec?.firstSeen || Date.now(),
+    lastSeen: Date.now(),
+  });
+  await relayToTopic(env, msg, topicId, userId);
 }
 
 // 把广告消息扔进固定的“🚫 广告拦截”隔离话题（含来源 + 理由 + 原文）
@@ -209,12 +244,41 @@ async function quarantine(env: Env, msg: TgMessage, reason: string): Promise<voi
   }
 }
 
-async function relayToTopic(env: Env, msg: TgMessage, topicId: number): Promise<void> {
+// 转发到话题；若话题已被手动删除则自愈（清掉映射，下条消息会自动重建）
+async function relayToTopic(env: Env, msg: TgMessage, topicId: number, userId: number): Promise<void> {
   try {
-    await copyMessage(env, env.ADMIN_GROUP_ID, msg.chat.id, msg.message_id, {
-      message_thread_id: topicId,
-    });
-  } catch (e) {
-    console.error('转发到话题失败', e);
+    await copyMessage(env, env.ADMIN_GROUP_ID, msg.chat.id, msg.message_id, { message_thread_id: topicId });
+  } catch (e: any) {
+    const desc = String(e?.message || '');
+    if (desc.includes('thread not found') || desc.includes('TOPIC_DELETED') || desc.includes('topic')) {
+      console.log(`话题 ${topicId} 已不存在，自愈：清除用户 ${userId} 记录，下条消息将重建话题`);
+      await deleteTopicMap(env, topicId);
+      await deleteUser(env, userId);
+    } else {
+      console.error('转发到话题失败', e);
+    }
   }
+}
+
+// 自动清理：删除「从没回复过(pending)」且超过 CLEANUP_DAYS 天没新消息的话题
+export async function runCleanup(env: Env): Promise<number> {
+  const days = Number(env.CLEANUP_DAYS || '0');
+  if (!days || days <= 0) return 0;
+  const cutoff = Date.now() - days * 86400000;
+  const users = await listUsers(env);
+  let n = 0;
+  for (const { userId, rec } of users) {
+    if (rec.status === 'pending' && (rec.lastSeen || rec.firstSeen) < cutoff) {
+      try {
+        await deleteForumTopic(env, env.ADMIN_GROUP_ID, rec.topicId);
+      } catch (e) {
+        console.error('删除话题失败', e);
+      }
+      await deleteTopicMap(env, rec.topicId);
+      await deleteUser(env, userId);
+      n++;
+    }
+  }
+  console.log(`自动清理：删除 ${n} 个未回复的过期话题（阈值 ${days} 天）`);
+  return n;
 }

@@ -1,5 +1,5 @@
 import type { Env, TgUpdate } from './types';
-import { handleUpdate } from './handlers';
+import { handleUpdate, runCleanup } from './handlers';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -31,5 +31,10 @@ export default {
     }
 
     return new Response('ok', { status: 200 });
+  },
+
+  // Cron 定时触发：每天自动清理未回复过的过期话题（在 wrangler.toml [triggers] 配置）
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runCleanup(env));
   },
 };

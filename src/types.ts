@@ -10,6 +10,7 @@ export interface Env {
   ADMIN_USER_ID: string;
   AI_BASE_URL: string;
   AI_MODEL: string;
+  CLEANUP_DAYS: string; // 自动清理：未回复过的话题超过这么多天没新消息就删；"0" 关闭
 }
 
 // Telegram 数据结构（仅用到的字段）

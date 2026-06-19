@@ -33,6 +33,7 @@
 | `ADMIN_USER_ID` | 你的 TG 用户 id |
 | `AI_BASE_URL` | `https://api.deepseek.com/chat/completions` |
 | `AI_MODEL` | `deepseek-v4-flash` |
+| `CLEANUP_DAYS` | `30`（自动清理：未回复过的话题超过这么多天没消息就删；填 `0` 关闭） |
 
 **密钥（选 Secret / Encrypt）**
 | 名称 | 值 |
@@ -52,14 +53,19 @@ https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://tgadx.<子域>.wo
 
 看到 `{"ok":true,...}` 就成了。
 
-### 5)（可选）命令菜单
-想在群里打 `/` 弹出 `/allow /reset /ban /unban`，最省事的办法：私聊 [@BotFather](https://t.me/BotFather) 发 `/setcommands` → 选你的 bot → 粘贴：
+### 5)（推荐）开启自动清理的定时任务
+让"每天自动删未回复的过期话题"生效：进 Worker → **Settings → Triggers → Cron Triggers → Add Cron Trigger**，填 `0 3 * * *`（每天一次）→ 保存。不加这个的话，自动清理不会跑（手动 `/del`、`/cleannow` 仍可用）。
+
+### 6)（可选）命令菜单
+想在群里打 `/` 弹出命令，最省事：私聊 [@BotFather](https://t.me/BotFather) 发 `/setcommands` → 选你的 bot → 粘贴：
 
 ```
 allow - 放行用户（之后不再判定）：/allow 用户ID
 reset - 重置为新用户、重新AI判定：/reset 用户ID
 ban - 屏蔽当前话题的联系人
 unban - 解除屏蔽并信任
+del - 删除当前话题（在要删的话题里发）
+cleannow - 立即清理未回复过的过期话题
 ```
 
 （注意：BotFather 这种方式会让命令在所有聊天里都可见。不影响安全——陌生人就算看到也用不了，只有你在管理群里有效。想做到「只对管理群可见」需要用命令行版的 `scripts/setup-telegram.mjs`。）

@@ -67,6 +67,21 @@ async function deleteUser(env, userId) {
   await env.STATE.delete(`user:${userId}`);
 }
 __name(deleteUser, "deleteUser");
+async function listUsers(env) {
+  const out = [];
+  let cursor;
+  do {
+    const res = await env.STATE.list({ prefix: "user:", cursor });
+    for (const k of res.keys) {
+      const rec = await env.STATE.get(k.name, "json");
+      if (rec)
+        out.push({ userId: Number(k.name.slice("user:".length)), rec });
+    }
+    cursor = res.list_complete ? void 0 : res.cursor;
+  } while (cursor);
+  return out;
+}
+__name(listUsers, "listUsers");
 async function getUserIdByTopic(env, topicId) {
   const v = await env.STATE.get(`topic:${topicId}`);
   return v ? Number(v) : null;
@@ -89,6 +104,10 @@ async function setSpamTopicId(env, topicId) {
   await env.STATE.put("meta:spamTopic", String(topicId));
 }
 __name(setSpamTopicId, "setSpamTopicId");
+async function clearSpamTopicId(env) {
+  await env.STATE.delete("meta:spamTopic");
+}
+__name(clearSpamTopicId, "clearSpamTopicId");
 
 // src/telegram.ts
 async function call(env, method, params) {
@@ -122,6 +141,10 @@ async function createForumTopic(env, chatId, name) {
   return result.message_thread_id;
 }
 __name(createForumTopic, "createForumTopic");
+function deleteForumTopic(env, chatId, topicId) {
+  return call(env, "deleteForumTopic", { chat_id: chatId, message_thread_id: topicId });
+}
+__name(deleteForumTopic, "deleteForumTopic");
 
 // src/handlers.ts
 function displayName(msg) {
@@ -202,6 +225,29 @@ async function handleAdminGroup(env, msg) {
     await sendMessage(env, env.ADMIN_GROUP_ID, `\u267B\uFE0F \u5DF2\u91CD\u7F6E\u7528\u6237 ${id}\uFF0C\u5176\u4E0B\u4E00\u6761\u6D88\u606F\u4F1A\u88AB\u5F53\u4F5C\u65B0\u7528\u6237\u91CD\u65B0 AI \u5224\u5B9A\u3002`, reply);
     return;
   }
+  if (text.startsWith("/cleannow")) {
+    const n = await runCleanup(env);
+    await sendMessage(env, env.ADMIN_GROUP_ID, `\u{1F9F9} \u6E05\u7406\u5B8C\u6210\uFF0C\u5220\u9664\u4E86 ${n} \u4E2A\u672A\u56DE\u590D\u7684\u8FC7\u671F\u8BDD\u9898\u3002`, reply);
+    return;
+  }
+  if (text === "/del") {
+    if (!topicId)
+      return void await sendMessage(env, env.ADMIN_GROUP_ID, "\u8BF7\u5728\u8981\u5220\u9664\u7684\u8BDD\u9898\u91CC\u53D1\u9001 /del\u3002");
+    const spamTopicId2 = await getSpamTopicId(env);
+    const userId2 = await getUserIdByTopic(env, topicId);
+    try {
+      await deleteForumTopic(env, env.ADMIN_GROUP_ID, topicId);
+    } catch (e) {
+      console.error("\u5220\u9664\u8BDD\u9898\u5931\u8D25", e);
+    }
+    if (userId2) {
+      await deleteTopicMap(env, topicId);
+      await deleteUser(env, userId2);
+    }
+    if (spamTopicId2 && topicId === spamTopicId2)
+      await clearSpamTopicId(env);
+    return;
+  }
   if (!topicId)
     return;
   const spamTopicId = await getSpamTopicId(env);
@@ -247,7 +293,8 @@ async function allowUser(env, userId) {
     topicId,
     status: "trusted",
     name: rec?.name || String(userId),
-    firstSeen: rec?.firstSeen || Date.now()
+    firstSeen: rec?.firstSeen || Date.now(),
+    lastSeen: Date.now()
   });
   await sendMessage(env, env.ADMIN_GROUP_ID, `\u2705 \u5DF2\u653E\u884C\u7528\u6237 ${userId}\uFF0C\u5176\u540E\u7EED\u6D88\u606F\u4F1A\u8FDB\u5165\u672C\u8BDD\u9898\uFF0C\u4F60\u53EF\u5728\u6B64\u76F4\u63A5\u56DE\u590D\u3002`, {
     message_thread_id: topicId
@@ -260,7 +307,9 @@ async function handleInbound(env, msg) {
   if (rec?.status === "blocked")
     return;
   if (rec?.status === "trusted") {
-    await relayToTopic(env, msg, rec.topicId);
+    rec.lastSeen = Date.now();
+    await setUser(env, userId, rec);
+    await relayToTopic(env, msg, rec.topicId, userId);
     return;
   }
   const content = extractContent(msg);
@@ -276,7 +325,6 @@ async function handleInbound(env, msg) {
     const topicName = `${name} #${userId}`.slice(0, 128);
     topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, topicName);
     await setTopicMap(env, topicId, userId);
-    await setUser(env, userId, { topicId, status: "pending", name, firstSeen: Date.now() });
     const uname = msg.from.username ? `@${msg.from.username}` : "\uFF08\u65E0\u7528\u6237\u540D\uFF09";
     await sendMessage(
       env,
@@ -290,7 +338,14 @@ AI \u5224\u5B9A\uFF1A\u6B63\u5E38\uFF08${verdict.reason}\uFF09
       { message_thread_id: topicId }
     );
   }
-  await relayToTopic(env, msg, topicId);
+  await setUser(env, userId, {
+    topicId,
+    status: "pending",
+    name: rec?.name || displayName(msg),
+    firstSeen: rec?.firstSeen || Date.now(),
+    lastSeen: Date.now()
+  });
+  await relayToTopic(env, msg, topicId, userId);
 }
 __name(handleInbound, "handleInbound");
 async function quarantine(env, msg, reason) {
@@ -318,16 +373,44 @@ ID\uFF1A${msg.from.id}
   }
 }
 __name(quarantine, "quarantine");
-async function relayToTopic(env, msg, topicId) {
+async function relayToTopic(env, msg, topicId, userId) {
   try {
-    await copyMessage(env, env.ADMIN_GROUP_ID, msg.chat.id, msg.message_id, {
-      message_thread_id: topicId
-    });
+    await copyMessage(env, env.ADMIN_GROUP_ID, msg.chat.id, msg.message_id, { message_thread_id: topicId });
   } catch (e) {
-    console.error("\u8F6C\u53D1\u5230\u8BDD\u9898\u5931\u8D25", e);
+    const desc = String(e?.message || "");
+    if (desc.includes("thread not found") || desc.includes("TOPIC_DELETED") || desc.includes("topic")) {
+      console.log(`\u8BDD\u9898 ${topicId} \u5DF2\u4E0D\u5B58\u5728\uFF0C\u81EA\u6108\uFF1A\u6E05\u9664\u7528\u6237 ${userId} \u8BB0\u5F55\uFF0C\u4E0B\u6761\u6D88\u606F\u5C06\u91CD\u5EFA\u8BDD\u9898`);
+      await deleteTopicMap(env, topicId);
+      await deleteUser(env, userId);
+    } else {
+      console.error("\u8F6C\u53D1\u5230\u8BDD\u9898\u5931\u8D25", e);
+    }
   }
 }
 __name(relayToTopic, "relayToTopic");
+async function runCleanup(env) {
+  const days = Number(env.CLEANUP_DAYS || "0");
+  if (!days || days <= 0)
+    return 0;
+  const cutoff = Date.now() - days * 864e5;
+  const users = await listUsers(env);
+  let n = 0;
+  for (const { userId, rec } of users) {
+    if (rec.status === "pending" && (rec.lastSeen || rec.firstSeen) < cutoff) {
+      try {
+        await deleteForumTopic(env, env.ADMIN_GROUP_ID, rec.topicId);
+      } catch (e) {
+        console.error("\u5220\u9664\u8BDD\u9898\u5931\u8D25", e);
+      }
+      await deleteTopicMap(env, rec.topicId);
+      await deleteUser(env, userId);
+      n++;
+    }
+  }
+  console.log(`\u81EA\u52A8\u6E05\u7406\uFF1A\u5220\u9664 ${n} \u4E2A\u672A\u56DE\u590D\u7684\u8FC7\u671F\u8BDD\u9898\uFF08\u9608\u503C ${days} \u5929\uFF09`);
+  return n;
+}
+__name(runCleanup, "runCleanup");
 
 // src/index.ts
 var src_default = {
@@ -353,6 +436,10 @@ var src_default = {
       console.error("handleUpdate error", e);
     }
     return new Response("ok", { status: 200 });
+  },
+  // Cron 定时触发：每天自动清理未回复过的过期话题（在 wrangler.toml [triggers] 配置）
+  async scheduled(_event, env, ctx) {
+    ctx.waitUntil(runCleanup(env));
   }
 };
 export {
