@@ -194,6 +194,14 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
 
   if (verdict.isSpam) {
     await quarantine(env, msg, verdict.reason);
+    // 自动拉黑：判为广告后，该用户后续消息一律静默丢弃，直到你 /allow 放行
+    await setUser(env, userId, {
+      topicId: rec?.topicId || 0,
+      status: 'blocked',
+      name: displayName(msg),
+      firstSeen: rec?.firstSeen || Date.now(),
+      lastSeen: Date.now(),
+    });
     return;
   }
 
@@ -234,7 +242,7 @@ async function quarantine(env: Env, msg: TgMessage, reason: string): Promise<voi
   await sendMessage(
     env,
     env.ADMIN_GROUP_ID,
-    `🚫 拦截广告\n来自：${name} ${uname}\nID：${msg.from!.id}\n理由：${reason}\n误判的话发 /allow ${msg.from!.id} 放行`,
+    `🚫 拦截广告（已自动拉黑，后续消息将被忽略）\n来自：${name} ${uname}\nID：${msg.from!.id}\n理由：${reason}\n误判？发 /allow ${msg.from!.id} 放行`,
     { message_thread_id: topicId },
   );
   try {

@@ -317,6 +317,13 @@ async function handleInbound(env, msg) {
   console.log(`\u5165\u7AD9\u5224\u5B9A user=${userId} \u72B6\u6001=${rec ? "pending" : "new"} spam=${verdict.isSpam} \u7406\u7531=${verdict.reason} \u5185\u5BB9=${JSON.stringify(content).slice(0, 300)}`);
   if (verdict.isSpam) {
     await quarantine(env, msg, verdict.reason);
+    await setUser(env, userId, {
+      topicId: rec?.topicId || 0,
+      status: "blocked",
+      name: displayName(msg),
+      firstSeen: rec?.firstSeen || Date.now(),
+      lastSeen: Date.now()
+    });
     return;
   }
   let topicId = rec?.topicId;
@@ -359,11 +366,11 @@ async function quarantine(env, msg, reason) {
   await sendMessage(
     env,
     env.ADMIN_GROUP_ID,
-    `\u{1F6AB} \u62E6\u622A\u5E7F\u544A
+    `\u{1F6AB} \u62E6\u622A\u5E7F\u544A\uFF08\u5DF2\u81EA\u52A8\u62C9\u9ED1\uFF0C\u540E\u7EED\u6D88\u606F\u5C06\u88AB\u5FFD\u7565\uFF09
 \u6765\u81EA\uFF1A${name} ${uname}
 ID\uFF1A${msg.from.id}
 \u7406\u7531\uFF1A${reason}
-\u8BEF\u5224\u7684\u8BDD\u53D1 /allow ${msg.from.id} \u653E\u884C`,
+\u8BEF\u5224\uFF1F\u53D1 /allow ${msg.from.id} \u653E\u884C`,
     { message_thread_id: topicId }
   );
   try {
