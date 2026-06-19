@@ -49,6 +49,16 @@ function extractContent(msg: TgMessage): string {
   return parts.join('\n').trim();
 }
 
+const SIX_HOURS = 6 * 3600 * 1000;
+
+// 本地强规则预筛：命中"明显广告特征"直接判广告，不调 AI（省钱 + 防 AI 提示注入绕过）
+function looksObviouslySpam(text: string): boolean {
+  const t = text || '';
+  if (/t\.me\/[a-z0-9_]*bot\b/i.test(t)) return true; // t.me/xxxbot 引流到其他机器人
+  if (/[?&]start=/i.test(t)) return true; // 带 ?start= 推广码
+  return false;
+}
+
 export async function handleUpdate(update: TgUpdate, env: Env): Promise<void> {
   const msg = update.message;
   if (!msg || !msg.from || msg.from.is_bot) return;
@@ -70,6 +80,9 @@ export async function handleUpdate(update: TgUpdate, env: Env): Promise<void> {
 
 // 管理员在话题里回复 / 发命令
 async function handleAdminGroup(env: Env, msg: TgMessage): Promise<void> {
+  // 只认最高管理员本人：群里其他成员（万一被拉进来）不能发命令、不能借话题冒充你回复
+  if (Number(msg.from?.id) !== Number(env.ADMIN_USER_ID)) return;
+
   const topicId = msg.message_thread_id;
   const text = msg.text?.trim() ?? '';
   const reply = topicId ? { message_thread_id: topicId } : {};
@@ -96,7 +109,7 @@ async function handleAdminGroup(env: Env, msg: TgMessage): Promise<void> {
   // /cleannow：立即按规则清理（删除未回复过、且超过 CLEANUP_DAYS 天没新消息的话题）
   if (text.startsWith('/cleannow')) {
     const n = await runCleanup(env);
-    await sendMessage(env, env.ADMIN_GROUP_ID, `🧹 清理完成，删除了 ${n} 个未回复的过期话题。`, reply);
+    await sendMessage(env, env.ADMIN_GROUP_ID, `🧹 清理完成，删除了 ${n} 项过期记录。`, reply);
     return;
   }
 
@@ -177,24 +190,29 @@ async function allowUser(env: Env, userId: number): Promise<void> {
 async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
   const userId = msg.from!.id;
   const rec = await getUser(env, userId);
+  const now = Date.now();
 
   if (rec?.status === 'blocked') return;
 
   if (rec?.status === 'trusted') {
-    rec.lastSeen = Date.now();
-    await setUser(env, userId, rec);
+    // lastSeen 写节流：超过 6 小时才更新，省 KV 写额度（精度对 30 天清理足够）
+    if (now - (rec.lastSeen || 0) > SIX_HOURS) {
+      rec.lastSeen = now;
+      await setUser(env, userId, rec);
+    }
     await relayToTopic(env, msg, rec.topicId, userId);
     return;
   }
 
-  // 新用户 或 pending（你还没回复过他）：每条消息都过 AI 判定
+  // 新用户 或 pending：先本地强规则预筛，命中明显广告就不调 AI；否则交给 AI
   const content = extractContent(msg);
-  const verdict = await classify(env, content);
-  console.log(`入站判定 user=${userId} 状态=${rec ? 'pending' : 'new'} spam=${verdict.isSpam} 理由=${verdict.reason} 内容=${JSON.stringify(content).slice(0, 300)}`);
+  const verdict = looksObviouslySpam(content)
+    ? { isSpam: true, confidence: 1, reason: '命中明显广告特征（bot 引流/推广码）' }
+    : await classify(env, content);
+  console.log(`入站判定 user=${userId} 状态=${rec ? 'pending' : 'new'} spam=${verdict.isSpam} 理由=${verdict.reason}`);
 
   if (verdict.isSpam) {
     // 自动拉黑（开关 AUTO_BLOCK，默认开）：之后消息一律静默丢弃，直到你 /allow 放行。
-    // 关闭(="0")时不拉黑，该号每条广告仍会被拦并进广告话题。
     const willBlock = env.AUTO_BLOCK !== '0';
     await quarantine(env, msg, verdict.reason, willBlock);
     if (willBlock) {
@@ -202,8 +220,8 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
         topicId: rec?.topicId || 0,
         status: 'blocked',
         name: displayName(msg),
-        firstSeen: rec?.firstSeen || Date.now(),
-        lastSeen: Date.now(),
+        firstSeen: rec?.firstSeen || now,
+        lastSeen: now,
       });
     }
     return;
@@ -213,8 +231,7 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
   let topicId = rec?.topicId;
   if (!topicId) {
     const name = displayName(msg);
-    const topicName = `${name} #${userId}`.slice(0, 128);
-    topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, topicName);
+    topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, `${name} #${userId}`.slice(0, 128));
     await setTopicMap(env, topicId, userId);
     const uname = msg.from!.username ? `@${msg.from!.username}` : '（无用户名）';
     await sendMessage(
@@ -223,14 +240,12 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
       `🆕 新联系人\n姓名：${name}\n用户名：${uname}\nID：${userId}\nAI 判定：正常（${verdict.reason}）\n（你在本话题回复后，对方后续消息将不再判定）`,
       { message_thread_id: topicId },
     );
+    await setUser(env, userId, { topicId, status: 'pending', name, firstSeen: now, lastSeen: now });
+  } else if (now - (rec!.lastSeen || 0) > SIX_HOURS) {
+    // 已有话题的 pending 用户：同样做写节流
+    rec!.lastSeen = now;
+    await setUser(env, userId, rec!);
   }
-  await setUser(env, userId, {
-    topicId,
-    status: 'pending',
-    name: rec?.name || displayName(msg),
-    firstSeen: rec?.firstSeen || Date.now(),
-    lastSeen: Date.now(),
-  });
   await relayToTopic(env, msg, topicId, userId);
 }
 
@@ -273,15 +288,18 @@ async function relayToTopic(env: Env, msg: TgMessage, topicId: number, userId: n
   }
 }
 
-// 自动清理：删除「从没回复过(pending)」且超过 CLEANUP_DAYS 天没新消息的话题
+// 自动清理：① 删除「从没回复过(pending)」且超过 CLEANUP_DAYS 天没新消息的话题；
+//          ② 删除超过 90 天没动静的拉黑(blocked)记录，防 KV 无限增长
 export async function runCleanup(env: Env): Promise<number> {
+  const now = Date.now();
   const days = Number(env.CLEANUP_DAYS || '0');
-  if (!days || days <= 0) return 0;
-  const cutoff = Date.now() - days * 86400000;
+  const pendingCutoff = days > 0 ? now - days * 86400000 : null;
+  const blockedCutoff = now - 90 * 86400000;
   const users = await listUsers(env);
   let n = 0;
   for (const { userId, rec } of users) {
-    if (rec.status === 'pending' && (rec.lastSeen || rec.firstSeen) < cutoff) {
+    const last = rec.lastSeen || rec.firstSeen;
+    if (rec.status === 'pending' && pendingCutoff !== null && last < pendingCutoff) {
       try {
         await deleteForumTopic(env, env.ADMIN_GROUP_ID, rec.topicId);
       } catch (e) {
@@ -290,8 +308,17 @@ export async function runCleanup(env: Env): Promise<number> {
       await deleteTopicMap(env, rec.topicId);
       await deleteUser(env, userId);
       n++;
+    } else if (rec.status === 'blocked' && last < blockedCutoff) {
+      if (rec.topicId) {
+        try {
+          await deleteForumTopic(env, env.ADMIN_GROUP_ID, rec.topicId);
+        } catch {}
+        await deleteTopicMap(env, rec.topicId);
+      }
+      await deleteUser(env, userId);
+      n++;
     }
   }
-  console.log(`自动清理：删除 ${n} 个未回复的过期话题（阈值 ${days} 天）`);
+  console.log(`清理：删除 ${n} 项过期记录（pending 阈值 ${days} 天 / blocked 90 天）`);
   return n;
 }

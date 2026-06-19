@@ -8,12 +8,10 @@ export default {
       return new Response('ok', { status: 200 });
     }
 
-    // 校验 webhook secret（设 webhook 时通过 secret_token 传入）
-    if (env.WEBHOOK_SECRET) {
-      const secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
-      if (secret !== env.WEBHOOK_SECRET) {
-        return new Response('unauthorized', { status: 401 });
-      }
+    // 校验 webhook secret（fail-closed：没配置 secret 也一律拒绝，绝不进入"无校验"模式）
+    const secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
+    if (!env.WEBHOOK_SECRET || secret !== env.WEBHOOK_SECRET) {
+      return new Response('unauthorized', { status: 401 });
     }
 
     let update: TgUpdate;

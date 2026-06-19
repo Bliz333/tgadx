@@ -184,6 +184,16 @@ function extractContent(msg) {
   return parts.join("\n").trim();
 }
 __name(extractContent, "extractContent");
+var SIX_HOURS = 6 * 3600 * 1e3;
+function looksObviouslySpam(text) {
+  const t = text || "";
+  if (/t\.me\/[a-z0-9_]*bot\b/i.test(t))
+    return true;
+  if (/[?&]start=/i.test(t))
+    return true;
+  return false;
+}
+__name(looksObviouslySpam, "looksObviouslySpam");
 async function handleUpdate(update, env) {
   const msg = update.message;
   if (!msg || !msg.from || msg.from.is_bot)
@@ -204,6 +214,8 @@ async function handleUpdate(update, env) {
 }
 __name(handleUpdate, "handleUpdate");
 async function handleAdminGroup(env, msg) {
+  if (Number(msg.from?.id) !== Number(env.ADMIN_USER_ID))
+    return;
   const topicId = msg.message_thread_id;
   const text = msg.text?.trim() ?? "";
   const reply = topicId ? { message_thread_id: topicId } : {};
@@ -227,7 +239,7 @@ async function handleAdminGroup(env, msg) {
   }
   if (text.startsWith("/cleannow")) {
     const n = await runCleanup(env);
-    await sendMessage(env, env.ADMIN_GROUP_ID, `\u{1F9F9} \u6E05\u7406\u5B8C\u6210\uFF0C\u5220\u9664\u4E86 ${n} \u4E2A\u672A\u56DE\u590D\u7684\u8FC7\u671F\u8BDD\u9898\u3002`, reply);
+    await sendMessage(env, env.ADMIN_GROUP_ID, `\u{1F9F9} \u6E05\u7406\u5B8C\u6210\uFF0C\u5220\u9664\u4E86 ${n} \u9879\u8FC7\u671F\u8BB0\u5F55\u3002`, reply);
     return;
   }
   if (text === "/del") {
@@ -304,17 +316,20 @@ __name(allowUser, "allowUser");
 async function handleInbound(env, msg) {
   const userId = msg.from.id;
   const rec = await getUser(env, userId);
+  const now = Date.now();
   if (rec?.status === "blocked")
     return;
   if (rec?.status === "trusted") {
-    rec.lastSeen = Date.now();
-    await setUser(env, userId, rec);
+    if (now - (rec.lastSeen || 0) > SIX_HOURS) {
+      rec.lastSeen = now;
+      await setUser(env, userId, rec);
+    }
     await relayToTopic(env, msg, rec.topicId, userId);
     return;
   }
   const content = extractContent(msg);
-  const verdict = await classify(env, content);
-  console.log(`\u5165\u7AD9\u5224\u5B9A user=${userId} \u72B6\u6001=${rec ? "pending" : "new"} spam=${verdict.isSpam} \u7406\u7531=${verdict.reason} \u5185\u5BB9=${JSON.stringify(content).slice(0, 300)}`);
+  const verdict = looksObviouslySpam(content) ? { isSpam: true, confidence: 1, reason: "\u547D\u4E2D\u660E\u663E\u5E7F\u544A\u7279\u5F81\uFF08bot \u5F15\u6D41/\u63A8\u5E7F\u7801\uFF09" } : await classify(env, content);
+  console.log(`\u5165\u7AD9\u5224\u5B9A user=${userId} \u72B6\u6001=${rec ? "pending" : "new"} spam=${verdict.isSpam} \u7406\u7531=${verdict.reason}`);
   if (verdict.isSpam) {
     const willBlock = env.AUTO_BLOCK !== "0";
     await quarantine(env, msg, verdict.reason, willBlock);
@@ -323,8 +338,8 @@ async function handleInbound(env, msg) {
         topicId: rec?.topicId || 0,
         status: "blocked",
         name: displayName(msg),
-        firstSeen: rec?.firstSeen || Date.now(),
-        lastSeen: Date.now()
+        firstSeen: rec?.firstSeen || now,
+        lastSeen: now
       });
     }
     return;
@@ -332,8 +347,7 @@ async function handleInbound(env, msg) {
   let topicId = rec?.topicId;
   if (!topicId) {
     const name = displayName(msg);
-    const topicName = `${name} #${userId}`.slice(0, 128);
-    topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, topicName);
+    topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, `${name} #${userId}`.slice(0, 128));
     await setTopicMap(env, topicId, userId);
     const uname = msg.from.username ? `@${msg.from.username}` : "\uFF08\u65E0\u7528\u6237\u540D\uFF09";
     await sendMessage(
@@ -347,14 +361,11 @@ AI \u5224\u5B9A\uFF1A\u6B63\u5E38\uFF08${verdict.reason}\uFF09
 \uFF08\u4F60\u5728\u672C\u8BDD\u9898\u56DE\u590D\u540E\uFF0C\u5BF9\u65B9\u540E\u7EED\u6D88\u606F\u5C06\u4E0D\u518D\u5224\u5B9A\uFF09`,
       { message_thread_id: topicId }
     );
+    await setUser(env, userId, { topicId, status: "pending", name, firstSeen: now, lastSeen: now });
+  } else if (now - (rec.lastSeen || 0) > SIX_HOURS) {
+    rec.lastSeen = now;
+    await setUser(env, userId, rec);
   }
-  await setUser(env, userId, {
-    topicId,
-    status: "pending",
-    name: rec?.name || displayName(msg),
-    firstSeen: rec?.firstSeen || Date.now(),
-    lastSeen: Date.now()
-  });
   await relayToTopic(env, msg, topicId, userId);
 }
 __name(handleInbound, "handleInbound");
@@ -400,14 +411,15 @@ async function relayToTopic(env, msg, topicId, userId) {
 }
 __name(relayToTopic, "relayToTopic");
 async function runCleanup(env) {
+  const now = Date.now();
   const days = Number(env.CLEANUP_DAYS || "0");
-  if (!days || days <= 0)
-    return 0;
-  const cutoff = Date.now() - days * 864e5;
+  const pendingCutoff = days > 0 ? now - days * 864e5 : null;
+  const blockedCutoff = now - 90 * 864e5;
   const users = await listUsers(env);
   let n = 0;
   for (const { userId, rec } of users) {
-    if (rec.status === "pending" && (rec.lastSeen || rec.firstSeen) < cutoff) {
+    const last = rec.lastSeen || rec.firstSeen;
+    if (rec.status === "pending" && pendingCutoff !== null && last < pendingCutoff) {
       try {
         await deleteForumTopic(env, env.ADMIN_GROUP_ID, rec.topicId);
       } catch (e) {
@@ -416,9 +428,19 @@ async function runCleanup(env) {
       await deleteTopicMap(env, rec.topicId);
       await deleteUser(env, userId);
       n++;
+    } else if (rec.status === "blocked" && last < blockedCutoff) {
+      if (rec.topicId) {
+        try {
+          await deleteForumTopic(env, env.ADMIN_GROUP_ID, rec.topicId);
+        } catch {
+        }
+        await deleteTopicMap(env, rec.topicId);
+      }
+      await deleteUser(env, userId);
+      n++;
     }
   }
-  console.log(`\u81EA\u52A8\u6E05\u7406\uFF1A\u5220\u9664 ${n} \u4E2A\u672A\u56DE\u590D\u7684\u8FC7\u671F\u8BDD\u9898\uFF08\u9608\u503C ${days} \u5929\uFF09`);
+  console.log(`\u6E05\u7406\uFF1A\u5220\u9664 ${n} \u9879\u8FC7\u671F\u8BB0\u5F55\uFF08pending \u9608\u503C ${days} \u5929 / blocked 90 \u5929\uFF09`);
   return n;
 }
 __name(runCleanup, "runCleanup");
@@ -429,11 +451,9 @@ var src_default = {
     if (request.method !== "POST") {
       return new Response("ok", { status: 200 });
     }
-    if (env.WEBHOOK_SECRET) {
-      const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-      if (secret !== env.WEBHOOK_SECRET) {
-        return new Response("unauthorized", { status: 401 });
-      }
+    const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+    if (!env.WEBHOOK_SECRET || secret !== env.WEBHOOK_SECRET) {
+      return new Response("unauthorized", { status: 401 });
     }
     let update;
     try {
