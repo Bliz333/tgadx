@@ -38,36 +38,53 @@
 
 ---
 
-## 手动部署到 Cloudflare Workers
+## 部署方式（二选一）
+
+- **方式 A — 网页后台，零终端、不用装任何东西**：见 [`dashboard/README.md`](dashboard/README.md)。全程在 Cloudflare 网页里点点点 + 粘贴一个文件，适合不想碰命令行的人。**推荐新手用这个。**
+- **方式 B — 命令行（wrangler）**：见下方，适合要改代码、习惯终端的人。
+
+---
+
+## 方式 B：命令行手动部署到 Cloudflare Workers
+
+### 前置：先装好这两样
+- **Node.js（自带 npm）**：到 https://nodejs.org 下载 LTS 版安装（装完 `npm` 就有了）。验证：终端跑 `node -v` 能看到版本号即可。
+- **Git**：https://git-scm.com （Mac 装了 Xtools 通常自带）。
+
+### 步骤
 
 ```bash
-# 0. 安装依赖（建议本机装好 Node 18+）
+# 1. 把仓库拉到本地，并进入项目目录（后面所有命令都在这个目录里跑）
+git clone https://github.com/Bliz333/tgadx.git
+cd tgadx
+
+# 2. 安装依赖（就在 tgadx 目录里执行）
 npm install
 
-# 1. 登录 Cloudflare（二选一）
+# 3. 登录 Cloudflare（二选一）
 npx wrangler login                       # 本机有浏览器：弹出授权
 # 或无浏览器/CI：用 API Token（dash → My Profile → API Tokens → 模板「Edit Cloudflare Workers」）
 #   export CLOUDFLARE_API_TOKEN=xxxxx
 #   export CLOUDFLARE_ACCOUNT_ID=xxxxx
 
-# 2. 创建 KV 命名空间，把输出的 id 填进 wrangler.toml 的 kv_namespaces.id
+# 4. 创建 KV 命名空间，把输出的 id 填进 wrangler.toml 的 kv_namespaces.id
 npx wrangler kv namespace create STATE
 
-# 3. 在 wrangler.toml 的 [vars] 填好（非机密）：
+# 5. 在 wrangler.toml 的 [vars] 填好（非机密）：
 #    ADMIN_GROUP_ID = "-100xxxxxxxxxx"
 #    ADMIN_USER_ID  = "你的TG用户id"
 #    AI_BASE_URL / AI_MODEL 默认 DeepSeek，可改
 
-# 4. 设置机密（不写进仓库）。WEBHOOK_SECRET 自己生成一段随机串：
+# 6. 设置机密（不写进仓库）。WEBHOOK_SECRET 自己生成一段随机串：
 #    例如  node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
 npx wrangler secret put BOT_TOKEN
 npx wrangler secret put AI_API_KEY
 npx wrangler secret put WEBHOOK_SECRET
 
-# 5. 部署，记下输出的 Worker URL（形如 https://tgadx.<子域>.workers.dev）
+# 7. 部署，记下输出的 Worker URL（形如 https://tgadx.<子域>.workers.dev）
 npx wrangler deploy
 
-# 6. 设置 webhook + 命令菜单（用仓库自带脚本，从环境变量读，不留密钥）
+# 8. 设置 webhook + 命令菜单（用仓库自带脚本，从环境变量读，不留密钥）
 BOT_TOKEN='你的bot token' \
 WORKER_URL='https://tgadx.<子域>.workers.dev' \
 WEBHOOK_SECRET='第4步设的同一个值' \
@@ -119,6 +136,7 @@ Cloudflare 后台 → Workers & Pages → **tgadx** → **Logs**，或本机 `np
 
 ```
 wrangler.toml            Cloudflare 配置（KV 绑定、vars）
+dashboard/               网页后台零终端部署：单文件 worker.js + 图文教程
 scripts/setup-telegram.mjs  设置 webhook + 命令菜单（无密钥）
 src/index.ts             入口：校验 webhook secret，分派 update
 src/handlers.ts          业务逻辑：入站判定、群内回复中继、/allow /reset /ban /unban
