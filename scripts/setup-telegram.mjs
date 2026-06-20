@@ -44,13 +44,23 @@ const commands = [
       }),
     ),
   );
-  // 管理命令只在管理群对管理员显示
+  // 管理命令：在管理群对管理员显示
   console.log(
     '命令(群管理员):',
     JSON.stringify(
       await api('setMyCommands', {
         commands,
         scope: { type: 'chat_administrators', chat_id: Number(ADMIN_GROUP_ID) },
+      }),
+    ),
+  );
+  // 同时注册到「该群所有成员」作用域，让 / 菜单更稳地弹出（管理群只有你，不会泄露给陌生人）
+  console.log(
+    '命令(该群):',
+    JSON.stringify(
+      await api('setMyCommands', {
+        commands,
+        scope: { type: 'chat', chat_id: Number(ADMIN_GROUP_ID) },
       }),
     ),
   );
