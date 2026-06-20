@@ -40,6 +40,7 @@ const commands = [
         secret_token: WEBHOOK_SECRET || undefined,
         allowed_updates: ['message'],
         drop_pending_updates: true,
+        max_connections: 1, // 串行投递：一条处理完再来下一条，避免并发绕过"自动拉黑"
       }),
     ),
   );
