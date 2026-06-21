@@ -57,7 +57,7 @@ async function baseMenu(env: Env, chatId: number | string, messageId: number): P
     '📝 <b>基础配置（人机验证）</b>',
     '',
     '验证方式：<b>图标按钮验证</b>——随机给出若干图标，让对方点出指定的那个；',
-    '点错或乱点直接拦截，纯发广告的脚本不会点按钮，因此挡得住。',
+    '点错有第二次机会（换一道题），两次都错才拦截；纯发广告的脚本不点按钮，照样挡得住。',
     '',
     `• 验证开关: ${enabled ? '✅ 已开启' : '❌ 已关闭'}`,
     `• 欢迎消息: ${escapeHtml(welcome).slice(0, 30)}...`,
