@@ -51,7 +51,7 @@ export async function handleAdminConfigStart(env: Env, chatId: number | string, 
 // ---------- 基础配置（验证） ----------
 async function baseMenu(env: Env, chatId: number | string, messageId: number): Promise<void> {
   const welcome = await getConfig(env, 'welcome_msg', DEFAULT_WELCOME);
-  const options = await getConfig(env, 'verify_options', '4');
+  const options = await getConfig(env, 'verify_options', '8');
   const enabled = (await getConfig(env, 'verify_enabled', 'true')).toLowerCase() === 'true';
   const text = [
     '📝 <b>基础配置（人机验证）</b>',
@@ -61,7 +61,7 @@ async function baseMenu(env: Env, chatId: number | string, messageId: number): P
     '',
     `• 验证开关: ${enabled ? '✅ 已开启' : '❌ 已关闭'}`,
     `• 欢迎消息: ${escapeHtml(welcome).slice(0, 30)}...`,
-    `• 按钮个数: <code>${escapeHtml(options)}</code> 个（越多越难蒙对，范围 2–8）`,
+    `• 按钮个数: <code>${escapeHtml(options)}</code> 个（每排 4 个，越多越难蒙对，范围 8–20）`,
     '',
     '请选择要修改的项：',
   ].join('\n');
@@ -202,7 +202,7 @@ async function ruleDelete(env: Env, key: string, value: string): Promise<void> {
 // ---------- 文本输入态 ----------
 const EDIT_META: Record<string, { prompt: string; back: string }> = {
   welcome_msg: { prompt: '请发送新的<b>欢迎消息</b>：', back: 'config:menu:base' },
-  verify_options: { prompt: '请发送<b>验证按钮个数</b>（2–8 的数字，越多越难蒙对）：', back: 'config:menu:base' },
+  verify_options: { prompt: '请发送<b>验证按钮个数</b>（8–20 的数字，每排 4 个，越多越难蒙对）：', back: 'config:menu:base' },
   block_threshold: { prompt: '请发送新的<b>屏蔽次数阈值</b>（数字）：', back: 'config:menu:keyword' },
   block_keywords: { prompt: '请发送新的<b>屏蔽关键词</b>（支持正则）：', back: 'config:menu:keyword' },
   keyword_responses: {

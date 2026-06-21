@@ -1,6 +1,15 @@
-import type { Env, TgCallbackQuery, TgInlineKeyboardMarkup } from './types';
-import { getConfig, dbConfigGet, dbConfigPut, dbConfigDelete, dbUserGet, dbUserUpdate } from './db';
-import { sendMessage, editMessageText, answerCallbackQuery } from './telegram';
+import type { Env, TgCallbackQuery, TgUser, TgInlineKeyboardMarkup } from './types';
+import {
+  getConfig,
+  dbConfigGet,
+  dbConfigPut,
+  dbConfigDelete,
+  dbUserGet,
+  dbUserUpdate,
+  getSpamTopicId,
+  setSpamTopicId,
+} from './db';
+import { sendMessage, editMessageText, answerCallbackQuery, createForumTopic } from './telegram';
 
 export const DEFAULT_WELCOME = '👋 欢迎！开始聊天前，请先完成一步真人验证。';
 
@@ -17,11 +26,22 @@ const ICON_POOL: { e: string; name: string }[] = [
   { e: '🍊', name: '橙子' },
   { e: '🐱', name: '猫' },
   { e: '🐶', name: '狗' },
+  { e: '🐼', name: '熊猫' },
+  { e: '🐰', name: '兔子' },
+  { e: '🐸', name: '青蛙' },
+  { e: '🐧', name: '企鹅' },
   { e: '⭐', name: '星星' },
   { e: '❤️', name: '红心' },
   { e: '🌙', name: '月亮' },
   { e: '☀️', name: '太阳' },
+  { e: '🌈', name: '彩虹' },
+  { e: '⚽', name: '足球' },
+  { e: '🚗', name: '汽车' },
+  { e: '✈️', name: '飞机' },
 ];
+
+// 验证按钮个数：默认 8（两排），下限 8，上限为图标池大小。
+const MIN_OPTIONS = 8;
 
 // 当前挑战存在 config 表（key=vrf:<userId>），值为 JSON：正确 token + 已错次数 + 上一题目标（避免重复）。
 const challengeKey = (uid: string | number) => `vrf:${uid}`;
@@ -50,6 +70,28 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+// 验证失败被拦时，往「🚫 广告拦截」话题发一条通知 + /allow 提示，
+// 这样万一真人误触被拦，你也能在群里看到并放行。
+async function notifyBlocked(env: Env, user: TgUser): Promise<void> {
+  try {
+    let topicId = await getSpamTopicId(env);
+    if (!topicId) {
+      topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, '🚫 广告拦截');
+      await setSpamTopicId(env, topicId);
+    }
+    const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || '未知';
+    const uname = user.username ? `@${user.username}` : '（无用户名）';
+    await sendMessage(
+      env,
+      env.ADMIN_GROUP_ID,
+      `🚫 有人未通过人机验证，已自动拦截\n来自：${name} ${uname}\nID：${user.id}\n若是真人误触，发 /allow ${user.id} 放行`,
+      { message_thread_id: topicId },
+    );
+  } catch (e) {
+    console.error('发送验证拦截通知失败', e);
+  }
+}
+
 async function getChallenge(env: Env, userId: string | number): Promise<Challenge | null> {
   const raw = await dbConfigGet(env, challengeKey(userId));
   if (!raw) return null;
@@ -69,8 +111,8 @@ async function issueChallenge(
   prefix = '',
   excludeEmoji?: string,
 ): Promise<void> {
-  const raw = Number(await getConfig(env, 'verify_options', '4'));
-  const count = Math.min(8, Math.max(2, Number.isFinite(raw) ? raw : 4));
+  const raw = Number(await getConfig(env, 'verify_options', String(MIN_OPTIONS)));
+  const count = Math.min(ICON_POOL.length, Math.max(MIN_OPTIONS, Number.isFinite(raw) ? raw : MIN_OPTIONS));
   const picked = shuffle(ICON_POOL).slice(0, count);
   let targetIdx = Math.floor(Math.random() * picked.length);
   // 换题时若随机到的目标和上一题相同，挪一个，保证目标图标不同（picked 内图标各不相同）。
@@ -151,6 +193,7 @@ export async function handleVerifyCallback(env: Env, cb: TgCallbackQuery): Promi
     await dbUserUpdate(env, userId, { is_blocked: true });
     await answerCallbackQuery(env, cb.id, '❌ 验证失败，你已被拦截。', true);
     if (msgId) await editMessageText(env, userId, msgId, '🚫 两次都点错了，已被拦截。').catch(() => {});
+    await notifyBlocked(env, cb.from);
     return;
   }
   // 还有机会 → 作废旧题、换一道不同的题
