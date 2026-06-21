@@ -13,7 +13,7 @@ import {
   clearSpamTopicId,
 } from './db';
 import { sendMessage, copyMessage, createForumTopic, deleteForumTopic, answerCallbackQuery } from './telegram';
-import { startVerification, checkVerification } from './verify';
+import { startVerification, remindVerification, handleVerifyCallback } from './verify';
 import { applyKeywordBlock, applyContentFilter, applyAutoReply } from './filters';
 import { buildInfoCard, getInfoCardButtons, displayNameOf, handleCardCallback } from './cards';
 import { handleAdminConfigStart, handleAdminConfigInput, handleConfigCallback } from './menu';
@@ -95,8 +95,14 @@ async function handleAdminPrivate(env: Env, msg: TgMessage): Promise<void> {
   await handleAdminConfigInput(env, msg.from!.id, msg.text ?? '');
 }
 
-// 回调路由：仅管理员可操作（配置菜单 + 资料卡按钮）
+// 回调路由
 async function handleCallback(env: Env, cb: TgCallbackQuery): Promise<void> {
+  // 真人验证按钮：陌生人点击，必须在“仅管理员”校验之前放行
+  if ((cb.data || '').startsWith('vrf:')) {
+    await handleVerifyCallback(env, cb);
+    return;
+  }
+  // 以下（配置菜单 + 资料卡按钮）仅最高管理员可操作
   if (Number(cb.from.id) !== Number(env.ADMIN_USER_ID)) {
     await answerCallbackQuery(env, cb.id, '您无权操作此菜单。', true);
     return;
@@ -222,8 +228,8 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
     if (user.verify_state === 'new') {
       await startVerification(env, userId);
     } else {
-      // pending_verification：把这条当作答案校验（无论对错都不中继）
-      await checkVerification(env, userId, text);
+      // pending_verification：用户打字而非点按钮 → 重新出题提醒（不中继）
+      await remindVerification(env, userId);
     }
     return;
   }

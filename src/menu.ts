@@ -10,7 +10,7 @@ import {
 } from './db';
 import { sendMessage, editMessageText, answerCallbackQuery } from './telegram';
 import { escapeHtml } from './cards';
-import { DEFAULT_WELCOME, DEFAULT_VERIF_Q, DEFAULT_VERIF_A } from './verify';
+import { DEFAULT_WELCOME } from './verify';
 
 // 统一：有 messageId 就编辑，否则发送新消息
 async function render(
@@ -51,16 +51,17 @@ export async function handleAdminConfigStart(env: Env, chatId: number | string, 
 // ---------- 基础配置（验证） ----------
 async function baseMenu(env: Env, chatId: number | string, messageId: number): Promise<void> {
   const welcome = await getConfig(env, 'welcome_msg', DEFAULT_WELCOME);
-  const verifQ = await getConfig(env, 'verif_q', DEFAULT_VERIF_Q);
-  const verifA = await getConfig(env, 'verif_a', DEFAULT_VERIF_A);
+  const options = await getConfig(env, 'verify_options', '4');
   const enabled = (await getConfig(env, 'verify_enabled', 'true')).toLowerCase() === 'true';
   const text = [
     '📝 <b>基础配置（人机验证）</b>',
     '',
+    '验证方式：<b>图标按钮验证</b>——随机给出若干图标，让对方点出指定的那个；',
+    '点错或乱点直接拦截，纯发广告的脚本不会点按钮，因此挡得住。',
+    '',
     `• 验证开关: ${enabled ? '✅ 已开启' : '❌ 已关闭'}`,
     `• 欢迎消息: ${escapeHtml(welcome).slice(0, 30)}...`,
-    `• 验证问题: ${escapeHtml(verifQ).slice(0, 30)}...`,
-    `• 验证答案: <code>${escapeHtml(verifA)}</code>（多答案用 | 分隔）`,
+    `• 按钮个数: <code>${escapeHtml(options)}</code> 个（越多越难蒙对，范围 2–8）`,
     '',
     '请选择要修改的项：',
   ].join('\n');
@@ -73,8 +74,7 @@ async function baseMenu(env: Env, chatId: number | string, messageId: number): P
         },
       ],
       [{ text: '📝 编辑欢迎消息', callback_data: 'config:edit:welcome_msg' }],
-      [{ text: '❓ 编辑验证问题', callback_data: 'config:edit:verif_q' }],
-      [{ text: '🔑 编辑验证答案', callback_data: 'config:edit:verif_a' }],
+      [{ text: '🔢 修改按钮个数', callback_data: 'config:edit:verify_options' }],
       [{ text: '⬅️ 返回主菜单', callback_data: 'config:menu:' }],
     ],
   };
@@ -202,8 +202,7 @@ async function ruleDelete(env: Env, key: string, value: string): Promise<void> {
 // ---------- 文本输入态 ----------
 const EDIT_META: Record<string, { prompt: string; back: string }> = {
   welcome_msg: { prompt: '请发送新的<b>欢迎消息</b>：', back: 'config:menu:base' },
-  verif_q: { prompt: '请发送新的<b>验证问题</b>：', back: 'config:menu:base' },
-  verif_a: { prompt: '请发送新的<b>验证答案</b>（多答案用 | 分隔）：', back: 'config:menu:base' },
+  verify_options: { prompt: '请发送<b>验证按钮个数</b>（2–8 的数字，越多越难蒙对）：', back: 'config:menu:base' },
   block_threshold: { prompt: '请发送新的<b>屏蔽次数阈值</b>（数字）：', back: 'config:menu:keyword' },
   block_keywords: { prompt: '请发送新的<b>屏蔽关键词</b>（支持正则）：', back: 'config:menu:keyword' },
   keyword_responses: {
