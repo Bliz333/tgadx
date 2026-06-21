@@ -1,6 +1,6 @@
-import type { Env } from './types';
+import type { Env, TgInlineKeyboardMarkup } from './types';
 
-// 统一调用 Telegram Bot API，失败抛错
+// 统一调用 Telegram Bot API，失败抛错（message 含 description，供自愈/重建判断）
 async function call(env: Env, method: string, params: Record<string, unknown>): Promise<any> {
   const res = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
     method: 'POST',
@@ -48,4 +48,51 @@ export async function createForumTopic(env: Env, chatId: number | string, name: 
 // 删除一个话题（清理用）
 export function deleteForumTopic(env: Env, chatId: number | string, topicId: number): Promise<any> {
   return call(env, 'deleteForumTopic', { chat_id: chatId, message_thread_id: topicId });
+}
+
+// ---------- 配置菜单 / 资料卡按钮用到的方法 ----------
+
+export function editMessageText(
+  env: Env,
+  chatId: number | string,
+  messageId: number,
+  text: string,
+  extra: Record<string, unknown> = {},
+): Promise<any> {
+  return call(env, 'editMessageText', { chat_id: chatId, message_id: messageId, text, ...extra });
+}
+
+export function editMessageReplyMarkup(
+  env: Env,
+  chatId: number | string,
+  messageId: number,
+  replyMarkup: TgInlineKeyboardMarkup,
+): Promise<any> {
+  return call(env, 'editMessageReplyMarkup', {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: replyMarkup,
+  });
+}
+
+export function answerCallbackQuery(
+  env: Env,
+  callbackQueryId: string,
+  text = '',
+  showAlert = false,
+): Promise<any> {
+  return call(env, 'answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    text,
+    show_alert: showAlert,
+  });
+}
+
+export function pinChatMessage(
+  env: Env,
+  chatId: number | string,
+  messageId: number,
+  extra: Record<string, unknown> = {},
+): Promise<any> {
+  return call(env, 'pinChatMessage', { chat_id: chatId, message_id: messageId, ...extra });
 }
