@@ -1,4 +1,4 @@
-import type { Env, TgUser, TgCallbackQuery, UserRecord, TgInlineKeyboardMarkup } from './types';
+import type { Env, TgUser, TgCallbackQuery, UserRecord, TgInlineKeyboardButton, TgInlineKeyboardMarkup } from './types';
 import {
   dbConfigGet,
   dbConfigPut,
@@ -38,25 +38,56 @@ export function buildInfoCard(u: TgUser): string {
 }
 
 // 资料卡下方按钮（屏蔽/解禁、静音/取消、查看资料、置顶）
+// withProfileLink=false 时省去 tg://user 按钮——对方隐私设置会让该按钮触发
+// BUTTON_USER_PRIVACY_RESTRICTED 导致整条卡片发送失败，失败时退化用无此按钮的版本重发。
 export function getInfoCardButtons(
   userId: string | number,
   isBlocked: boolean,
   isMuted: boolean,
+  withProfileLink = true,
 ): TgInlineKeyboardMarkup {
   const blockAction = isBlocked ? 'unblock' : 'block';
   const blockText = isBlocked ? '✅ 解除屏蔽' : '🚫 屏蔽此人';
   const muteAction = isMuted ? 'unmute' : 'mute';
   const muteText = isMuted ? '🔔 解除静音' : '🔕 静音通知';
-  return {
-    inline_keyboard: [
-      [
-        { text: blockText, callback_data: `${blockAction}:${userId}` },
-        { text: muteText, callback_data: `${muteAction}:${userId}` },
-      ],
-      [{ text: '👤 查看用户资料', url: `tg://user?id=${userId}` }],
-      [{ text: '📌 置顶此卡片', callback_data: `pin_card:${userId}` }],
+  const rows: TgInlineKeyboardButton[][] = [
+    [
+      { text: blockText, callback_data: `${blockAction}:${userId}` },
+      { text: muteText, callback_data: `${muteAction}:${userId}` },
     ],
-  };
+  ];
+  if (withProfileLink) rows.push([{ text: '👤 查看用户资料', url: `tg://user?id=${userId}` }]);
+  rows.push([{ text: '📌 置顶此卡片', callback_data: `pin_card:${userId}` }]);
+  return { inline_keyboard: rows };
+}
+
+// 发资料卡到话题，并把它的 message_id 存库（供后续屏蔽/静音刷新）。
+// 容错：若带 tg://user 按钮发送被隐私限制拒绝，自动退化为不带该按钮重发，绝不让卡片失败影响主流程。
+export async function sendInfoCard(
+  env: Env,
+  topicId: number,
+  user: TgUser,
+  isMuted: boolean,
+): Promise<void> {
+  const userId = user.id;
+  const send = (withLink: boolean) =>
+    sendMessage(env, env.ADMIN_GROUP_ID, buildInfoCard(user), {
+      message_thread_id: topicId,
+      parse_mode: 'HTML',
+      reply_markup: getInfoCardButtons(userId, false, isMuted, withLink),
+    });
+  try {
+    const card = await send(true);
+    await dbUserUpdate(env, userId, { info_card_message_id: String(card.message_id) });
+  } catch (e) {
+    console.error('资料卡发送失败（疑似 tg://user 隐私限制），退化为不带资料按钮重发', e);
+    try {
+      const card = await send(false);
+      await dbUserUpdate(env, userId, { info_card_message_id: String(card.message_id) });
+    } catch (e2) {
+      console.error('资料卡重发仍失败，跳过卡片', e2);
+    }
+  }
 }
 
 // 确保存在「屏蔽与静音名单」汇总话题，返回其 topicId

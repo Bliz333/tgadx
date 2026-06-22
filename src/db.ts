@@ -176,6 +176,20 @@ export async function dbTopicUserGet(env: Env, topicId: string | number): Promis
   return row ? String(row.user_id) : null;
 }
 
+// 创建话题前的“占位标记”值：表示某条消息正在为该用户建话题。
+export const TOPIC_CREATING = '__creating__';
+
+// 原子占位：把 topic_id 从空改成占位符。D1 写串行，并发/连发时只有第一条会成功（changes===1），
+// 其余拿到 false 去等真实 id，从根上杜绝“同一个人一次建出好几个话题”。
+export async function dbClaimTopicSlot(env: Env, userId: string | number): Promise<boolean> {
+  const res = await env.TG_BOT_DB.prepare(
+    `UPDATE users SET topic_id = '${TOPIC_CREATING}' WHERE user_id = ? AND (topic_id IS NULL OR topic_id = '')`,
+  )
+    .bind(String(userId))
+    .run();
+  return (res.meta?.changes ?? 0) === 1;
+}
+
 // 列出所有用户（清理用）
 export async function listUsers(env: Env): Promise<UserRecord[]> {
   const res = await env.TG_BOT_DB.prepare('SELECT * FROM users').all<any>();

@@ -6,6 +6,8 @@ import {
   dbUserUpdate,
   dbUserDelete,
   dbTopicUserGet,
+  dbClaimTopicSlot,
+  TOPIC_CREATING,
   listUsers,
   getConfig,
   getSpamTopicId,
@@ -15,7 +17,7 @@ import {
 import { sendMessage, copyMessage, createForumTopic, deleteForumTopic, answerCallbackQuery } from './telegram';
 import { startVerification, remindVerification, handleVerifyCallback } from './verify';
 import { applyKeywordBlock, applyContentFilter, applyAutoReply } from './filters';
-import { buildInfoCard, getInfoCardButtons, displayNameOf, handleCardCallback } from './cards';
+import { sendInfoCard, displayNameOf, handleCardCallback } from './cards';
 import { handleAdminConfigStart, handleAdminConfigInput, handleConfigCallback } from './menu';
 
 function displayName(msg: TgMessage): string {
@@ -48,6 +50,19 @@ function extractContent(msg: TgMessage): string {
 }
 
 const SIX_HOURS = 6 * 3600 * 1000;
+
+// 没抢到建话题占位的消息：轮询等第一条把真实 topic_id 建好（最多 ~3s）。
+// 返回 0 表示占位被释放（创建失败）或超时，调用方应丢弃本条。
+async function waitForTopicId(env: Env, userId: string | number): Promise<number> {
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    const rec = await dbUserGet(env, userId);
+    const t = rec?.topic_id;
+    if (!t) return 0; // 占位被释放，建话题失败了
+    if (t !== TOPIC_CREATING) return Number(t); // 真实 id 已就绪
+  }
+  return 0;
+}
 
 // 本地强规则预筛：命中"明显广告特征"直接判广告，不调 AI（省钱 + 防 AI 提示注入绕过）
 function looksObviouslySpam(text: string): boolean {
@@ -261,28 +276,41 @@ async function handleInbound(env: Env, msg: TgMessage): Promise<void> {
   }
 
   // 正常：确保有话题（带资料卡）并转发；relay_state 保持 pending（等你回复才转 trusted）
-  let topicId = user.topic_id ? Number(user.topic_id) : 0;
+  let topicId = user.topic_id && user.topic_id !== TOPIC_CREATING ? Number(user.topic_id) : 0;
   if (!topicId) {
-    const name = displayName(msg);
-    topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, `${name} #${userId}`.slice(0, 128));
-    // 资料卡（带按钮），保存其 message_id 以便后续屏蔽/静音同步刷新
-    const card = await sendMessage(env, env.ADMIN_GROUP_ID, buildInfoCard(msg.from!), {
-      message_thread_id: topicId,
-      parse_mode: 'HTML',
-      reply_markup: getInfoCardButtons(userId, false, user.is_muted),
-    });
-    await sendMessage(
-      env,
-      env.ADMIN_GROUP_ID,
-      `🆕 新联系人已通过验证。AI 判定：正常（${verdict.reason}）\n（你在本话题回复后，对方后续消息将不再判定）`,
-      { message_thread_id: topicId },
-    );
-    await dbUserUpdate(env, userId, {
-      topic_id: String(topicId),
-      info_card_message_id: String(card.message_id),
-      user_info: { name, username: msg.from!.username ? `@${msg.from!.username}` : '无', firstSeen: now },
-      last_seen: now,
-    });
+    // 原子占位：并发/连发时只有第一条能抢到，其余去等真实 id —— 杜绝同一个人一次建出多个话题
+    const won = await dbClaimTopicSlot(env, userId);
+    if (won) {
+      const name = displayName(msg);
+      try {
+        topicId = await createForumTopic(env, env.ADMIN_GROUP_ID, `${name} #${userId}`.slice(0, 128));
+        // 关键修复：先把真实 topic_id 落库，再发可能失败的资料卡，
+        // 避免“资料卡报错（tg://user 隐私限制）→ id 没存 → 每条消息都重建话题”。
+        await dbUserUpdate(env, userId, {
+          topic_id: String(topicId),
+          user_info: { name, username: msg.from!.username ? `@${msg.from!.username}` : '无', firstSeen: now },
+          last_seen: now,
+        });
+      } catch (e) {
+        await dbUserUpdate(env, userId, { topic_id: null }); // 释放占位，下条重试，绝不卡死
+        console.error('建话题失败，已释放占位', e);
+        return;
+      }
+      await sendInfoCard(env, topicId, msg.from!, user.is_muted); // 内部已容错
+      await sendMessage(
+        env,
+        env.ADMIN_GROUP_ID,
+        `🆕 新联系人已通过验证。AI 判定：正常（${verdict.reason}）\n（你在本话题回复后，对方后续消息将不再判定）`,
+        { message_thread_id: topicId },
+      ).catch((e) => console.error('发送新联系人提示失败', e));
+    } else {
+      // 没抢到：等第一条把真实 topic_id 建好再转发，避免丢消息
+      topicId = await waitForTopicId(env, userId);
+      if (!topicId) {
+        console.error(`等待话题创建失败，丢弃本条 user=${userId}`);
+        return;
+      }
+    }
   } else if (now - (user.last_seen || 0) > SIX_HOURS) {
     await dbUserUpdate(env, userId, { last_seen: now });
   }
@@ -327,7 +355,8 @@ async function relayToTopic(
     });
   } catch (e: any) {
     const desc = String(e?.message || '');
-    if (desc.includes('thread not found') || desc.includes('TOPIC_DELETED') || desc.includes('topic')) {
+    // 仅在“话题确实不存在”时自愈；不要因其它含 'topic' 的报错（如话题被关闭）误删用户、致重建话题。
+    if (desc.includes('thread not found') || desc.includes('TOPIC_DELETED')) {
       console.log(`话题 ${topicId} 已不存在，自愈：清除用户 ${userId} 记录，下条消息将重建话题`);
       await dbUserDelete(env, userId);
     } else {
